@@ -27,3 +27,45 @@ To explore joint distribution models for endangered animal species listed within
 
 ###Data
 Select all federally listed endangered species within the San Joaquin Desert.
+
+```{r load packages,message=FALSE}
+require(rgbif)
+require(sf)
+require(tidyverse)
+require(ggplot2) # must have geom_sf(), may need to devtools::install_github("tidyverse/ggplot2") 
+```
+
+Load the desert of interest.
+
+```{r}
+SJD <- st_read("data/shapefile/SanJoaquinDesert_FINAL.shp") %>% 
+  st_transform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+ggplot(SJD) +
+  geom_sf()
+```
+We use the rgbif package to download the data. We only need to run the `occ_download` command once since the query is stored on the GBIF website. This command doesn't actually work, on GBIF it says "The download request was unsuccessful. Please try it again or get in touch. Contact helpdesk"
+
+To make it work in a round-about way, go to GBIF, rerun the query created by the command below and download that data, it will successfully create a new query that works!
+
+*note: the keys will not match!*
+
+
+```{r,eval=FALSE}
+gbif <- occ_download(paste0("geometry =", st_as_text(st_convex_hull(SJD$geometry))),user =gbif_user,pwd = gbif_pwd,email = gbif_email)
+```
+
+Then download the data and load it.
+
+```{r}
+key <- "0017562-180508205500799" #from the manual rerun query on gbif
+gbif_citation(x=occ_download_meta(key))
+
+if(!file.exists(file.path("data",paste0(key,".zip")))){
+  occ_download_get(key=key,path="data")
+}
+
+SJD_gbif <- occ_download_import(key=key,path="data",fill=FALSE)
+```
+
+
