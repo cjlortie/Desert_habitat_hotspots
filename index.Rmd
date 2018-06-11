@@ -30,6 +30,8 @@ Select all federally listed endangered species within the San Joaquin Desert.
 
 ```{r load packages,message=FALSE}
 require(rgbif)
+require(sdmpredictors)
+require(HMSC)
 require(sf)
 require(tidyverse)
 require(ggplot2) # must have geom_sf(), may need to devtools::install_github("tidyverse/ggplot2") 
@@ -66,6 +68,105 @@ if(!file.exists(file.path("data",paste0(key,".zip")))){
 }
 
 SJD_gbif <- occ_download_import(key=key,path="data",fill=FALSE)
+
+
+```
+To do any SDM'ing we need environmental data, and if we're inerested in climate, we need to have layers that are available now and in the future
+
+```{r}
+layers_future <- list_layers_future(terrestrial=TRUE) 
+layers <- list_layers(terrestrial=TRUE) %>% 
+    filter(layer_code %in% layers_future$current_layer_code)
+
+# TODO
+# I'm arbitratily selecting the first 10 layers, you will want to give this more though (e.g. ipcc scenarions, more important variables, etc)
+layers <- layers[1:10,]
+
+#make a lat long version of SJD
+SJD_ll <- SJD %>%
+    st_transform("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0") %>%
+    as("Spatial")
+
+# download/load layers
+enviro_raster <- load_layers(layers$layer_code,datadir=paste0(getwd(),"/data/SDM/")) %>% 
+    crop(SJD_ll) %>% 
+    mask(SJD_ll)
+
+# make it sf style
+raster_grid <- rasterToPolygons(enviro_raster) %>%
+  st_as_sf() %>%
+  st_transform(st_crs(SJD))
+
+enviro_raw <- raster::extract(enviro_raster, raster_grid, fun = mean, na.rm = T)
+
+
+plot(enviro_raster)
 ```
 
+
+
+```{r}
+
+enviro_raster_future <- load_layers(layers$layer_code,datadir=paste0(getwd(),"/data/SDM/")) %>% 
+    crop(SJD_ll) %>% 
+    mask(SJD_ll)
+
+enviro_raw_future <- raster::extract(enviro_raster_future, raster_grid, fun = mean, na.rm = T)
+
+plot(enviro_raster_future)
+
+```
+
+```{r}
+
+# Overlay occurrences on grid
+sp_abun_raw <- SJD_gbif  %>%
+  filter(!is.na(species),species!="") %>%
+  st_as_sf(coords = c("decimallongitude", "decimallatitude"),
+                 crs="+proj=longlat +datum=WGS84")  %>%
+  st_transform(st_crs(SJD)) %>% 
+  mutate(gridID=st_covered_by(.,raster_grid)) %>%
+  mutate(gridID=factor(sapply(gridID,FUN=function(x) ifelse(length(x)==0,NA,x[[1]])),
+                       levels=row.names(raster_grid))) %>% 
+  data.frame() %>% 
+  group_by(gridID,species) %>%
+  summarize(records=n()) %>%
+  spread(species,records,fill=0) %>% 
+  filter(!is.na(gridID)) %>% 
+  left_join(data.frame(gridID=row.names(raster_grid)),., by = "gridID") %>%
+  data.frame() %>% 
+  column_to_rownames("gridID") %>% 
+  as.matrix()
+
+sp_abun_raw[is.na(sp_abun_raw)] <- 0    
+
+
+
+sp_pres_raw <- (sp_abun_raw>0) %>%
+  data.frame() %>%
+  sapply(as.numeric)
+```
+
+
+```{r}
+# Creating HMSC dataset for analyses
+HMSCdata <- as.HMSCdata(Y = sp_abun_raw,
+                        X = enviro_raw,
+                        Random = data.frame(sampling_unit = row.names(raster_grid)))
+memory.limit(65216)
+gc()
+model <- hmsc(HMSCdata)
+```
+
+```{r}
+# Generate predictions
+HMSCpred <- cbind(raster_grid,predict(model))
+
+# future
+HMSCdata_future <- as.HMSCdata(Y = sp_abun_raw,
+                        X = enviro_raw_future,
+                        Random = data.frame(sampling_unit = row.names(raster_grid)))
+
+HMSCpred_future <- cbind(raster_grid,predict(model,newdata=HMSCdata_future))
+```
 
